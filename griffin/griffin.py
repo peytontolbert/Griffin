@@ -36,6 +36,7 @@ class RMSNorm(nn.Module):
         super().__init__()
         self.scale = dim**0.5
         self.g = nn.Parameter(torch.ones(dim))
+        
 
     def forward(self, x):
         """
@@ -65,19 +66,32 @@ class ResidualBlock(nn.Module):
 
     def __init__(self, input_dim, expansion_factor, rnn_width):
         super(ResidualBlock, self).__init__()
+        # Calculate the hidden dimension by expanding the input dimension.
         hidden_dim = input_dim * expansion_factor
+        # Gated MLP block to learn complex transformations.
         self.mlp = GatedMLPBlock(input_dim, hidden_dim)
-        self.norm1 = RMSNorm(hidden_dim)
+        # First normalization layer applied after the MLP block.
+        self.norm1 = RMSNorm(input_dim)
+        # Recurrent block to capture temporal dependencies in the data.
         self.recurrent = RecurrentBlock(input_dim, rnn_width)
-        self.norm2 = RMSNorm(hidden_dim)
+        # Second normalization layer applied after adding the residual connection.
+        self.norm2 = RMSNorm(input_dim)
 
     def forward(self, x):
+        # Store the original input for the residual connection.
         residual = x
+        print(f"residual shape: {residual.shape}")
+        # Normalize the input before passing it to the recurrent block.
         x = self.norm1(x)
+        # Apply the recurrent block to capture temporal features.
         x = self.recurrent(x)
+        # Add the original input back to introduce the residual connection.
         residual = x + residual
+        # Normalize the output from the recurrent block and residual addition.
         x = self.norm2(residual)
+        # Apply the gated MLP block for further processing.
         x = self.mlp(x)
+        # Add the residual connection again before returning the output.
         return x + residual
 
 
