@@ -24,15 +24,6 @@ def output_head(x: Tensor, dim: int):
     return F.softmax(x, dim=-1)  # Softmax
 
 
-class MLPBlock(nn.Module):
-    def __init__(self, input_dim, output_dim):
-        super(MLPBlock, self).__init__()
-        self.linear = nn.Linear(input_dim, output_dim)
-
-    def forward(self, x):
-        return self.linear(x)
-
-
 class RMSNorm(nn.Module):
     def __init__(self, dim):
         """
@@ -72,11 +63,12 @@ class ResidualBlock(nn.Module):
         torch.Tensor: The output tensor after applying the residual block.
     """
 
-    def __init__(self, input_dim, hidden_dim, rnn_width):
+    def __init__(self, input_dim, expansion_factor, rnn_width):
         super(ResidualBlock, self).__init__()
+        hidden_dim = input_dim * expansion_factor
         self.mlp = GatedMLPBlock(input_dim, hidden_dim)
         self.norm1 = RMSNorm(hidden_dim)
-        self.recurrent = RecurrentBlock(input_dim, hidden_dim, rnn_width)
+        self.recurrent = RecurrentBlock(input_dim, rnn_width)
         self.norm2 = RMSNorm(hidden_dim)
 
     def forward(self, x):
@@ -131,7 +123,7 @@ class GatedMLPBlock(nn.Module):
 
 
 class RG_LRU(nn.Module):
-    def __init__(self, input_dim, mult):
+    def __init__(self, input_dim, rnn_width):
         """
         Initializes the RG_LRU module.
 
@@ -141,17 +133,16 @@ class RG_LRU(nn.Module):
         """
         super(RG_LRU, self).__init__()
         self.input_dim = input_dim
-        hidden_dim = input_dim * mult
-        self.hidden_dim = hidden_dim
+        self.rnn_width = rnn_width
         # Scalar-valued constant 'c'
         self.c = 8
         # Initialize weights and biases for the recurrence gate and input gate
-        self.Wa = nn.Parameter(Tensor(hidden_dim, input_dim))
-        self.Wx = nn.Parameter(Tensor(hidden_dim, input_dim))
-        self.ba = nn.Parameter(Tensor(hidden_dim))
-        self.bx = nn.Parameter(Tensor(hidden_dim))
+        self.Wa = nn.Parameter(Tensor(rnn_width, rnn_width))
+        self.Wx = nn.Parameter(Tensor(rnn_width, rnn_width))
+        self.ba = nn.Parameter(Tensor(rnn_width))
+        self.bx = nn.Parameter(Tensor(rnn_width))
         # Initialize the learnable parameter Λ for parameterizing 'a'
-        self.Lambda = nn.Parameter(Tensor(hidden_dim))
+        self.Lambda = nn.Parameter(Tensor(rnn_width))
         self.reset_parameters()
     def reset_parameters(self):
         nn.init.kaiming_normal_(
@@ -196,7 +187,9 @@ class RG_LRU(nn.Module):
         at = (
             a.diag_embed()
         )  # Make 'a' a diagonal matrix as recurrent weight 'a' in Eq. (4) is diagonal
-        ht = at * ht_minus_1 + (1-a.pow(2)).sqrt() * (it * xt)
+        ht = at.matmul(ht_minus_1.unsqueeze(-1)).squeeze(-1) + (
+            (1 - a.pow(2)).sqrt() * (it * xt)
+        )
         # Output of the layer is 'yt', which is 'ht'
         yt = ht
         return yt
@@ -218,26 +211,31 @@ class RecurrentBlock(nn.Module):
         torch.Tensor: The output tensor after applying the operations.
     """
 
-    def __init__(self, input_dim, hidden_dim, rnn_width):
+    def __init__(self, input_dim, rnn_width):
         super(RecurrentBlock, self).__init__()
         # Initialize RG_LRU component for recurrent gating with local recurrent units.
-        self.rg_lru = RG_LRU(input_dim, hidden_dim)
-        # Temporal convolution layer with kernel size 1 for dimensionality transformation without changing sequence length.
-        self.temporal_conv = nn.Conv1d(input_dim, hidden_dim, kernel_size=1)
+        self.rg_lru = RG_LRU(input_dim, rnn_width)
+        # Temporal convolution layer with kernel size 4 for dimensionality transformation without dimension size.
+        self.temporal_conv = nn.Conv1d(in_channels=rnn_width, out_channels=rnn_width, kernel_size=4, padding=2, groups=rnn_width)
         # Linear transformation to map the hidden dimensions back to input dimensions.
-        self.linear = nn.Linear(hidden_dim, input_dim)
-        self.linear2 = nn.Linear(hidden_dim, input_dim)
+        self.linear = nn.Linear(input_dim, rnn_width)
+        self.linear2 = nn.Linear(rnn_width, input_dim)
 
-    def forward(self, x):
+    def forward(self, x, ht_minus_1=None):
+        # Initialize the hidden state if it is not provided.
+        if ht_minus_1 is None:
+            ht_minus_1 = torch.zeros(x.size(0), self.rg_lru.rnn_width, device=x.device)
+
         # Apply a linear transformation followed by GELU activation for non-linearity.
         print(f"x shape: {x.shape}")
-        x_gel = self.linear(x)
-        x_gel = F.gelu(x_gel)
+        x_gel = F.gelu(self.linear(x))
         # Apply another linear transformation followed by temporal convolution for capturing temporal dynamics.
         x_rg = self.linear(x)
         x_rg = self.temporal_conv(x_rg.transpose(1, 2)).transpose(1, 2)
+        print(f"x_rg shape: {x_rg.shape}")
+        x_rg = x_rg[:, :x_gel.size(1), :]
         # Apply the RG_LRU operation for recurrent gating and feature enhancement.
-        x_rg = self.rg_lru(x_rg)
+        x_rg = self.rg_lru(x_rg, ht_minus_1)
         # Element-wise multiplication of the GELU-activated and RG_LRU-processed tensors for feature fusion.
         combined_x = x_gel * x_rg
         # Final linear transformation to produce the output tensor.
@@ -272,10 +270,9 @@ class GriffinModel(nn.Module):
         depth=12,
     ):
         super(GriffinModel, self).__init__()
-        self.hidden_dim = input_dim * mlp_expansion_factor  # Hidden dim
         self.input_dim = input_dim
         self.layers = nn.ModuleList(
-            [ResidualBlock(input_dim, self.hidden_dim, rnn_width) for _ in range(depth)]
+            [ResidualBlock(input_dim, mlp_expansion_factor, rnn_width) for _ in range(depth)]
         )
         self.embd = Embedding(vocab_size, input_dim)
 

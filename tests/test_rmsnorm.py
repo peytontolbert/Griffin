@@ -1,5 +1,5 @@
 import torch
-from griffin import RMSNorm
+from griffin.griffin import RMSNorm
 
 # Test case 1: Test forward pass with a random input tensor
 input_dim = 10

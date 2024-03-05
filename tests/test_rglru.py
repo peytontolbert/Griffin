@@ -1,5 +1,5 @@
 import torch
-from griffin import RG_LRU
+from griffin.griffin import RG_LRU
 
 # Create an instance of RG_LRU
 module = RG_LRU(input_dim=10, mult=3)

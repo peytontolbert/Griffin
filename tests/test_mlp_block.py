@@ -1,6 +1,6 @@
 import torch
 from torch import nn
-from griffin import GatedMLPBlock
+from griffin.griffin import GatedMLPBlock
 
 input_dim = 10
 hidden_dim = 10 * 3
