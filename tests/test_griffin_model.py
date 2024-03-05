@@ -2,10 +2,15 @@ import torch
 from torch.nn import Embedding
 import torch.nn as nn
 from griffin import GriffinModel, RecurrentBlock
+
 vocab_size = 100
+
+
 def test_griffin_model():
     # Create an instance of the GriffinModel class
-    model = GriffinModel(vocab_size=100, input_dim=10, mlp_expansion_factor=3, rnn_width=13, depth=12)
+    model = GriffinModel(
+        vocab_size=100, input_dim=10, mlp_expansion_factor=3, rnn_width=13, depth=12
+    )
 
     # Create a random input tensor
     x = torch.randint(1, 100, (1, 32))
@@ -24,6 +29,7 @@ def test_griffin_model():
 
     print("All tests passed.")
     return output
+
 
 # Run the test
 output = test_griffin_model()

@@ -1,37 +1,40 @@
 import torch
 import random
-from transformers import BertTokenizer
+from transformers import BertTokenizer, BertForQuestionAnswering
 from torch.utils.data import DataLoader, Dataset
 from datasets import load_dataset
-from griffin import GriffinModel  # Replace with your model import
+from griffin.griffin import GriffinModel  # Replace with your model import
 import gzip
 import numpy as np
-
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # Hyperparameters
 learning_rate = 1e-3
-batch_size = 64
+batch_size = 4
 num_epochs = 10
-input_dim = 128
-hidden_dim = 1024
-num_blocks = 3
+input_dim = 768
+rnn_width = 1024
+depth = 12
+mlp_expansion_factor = 3
 VALIDATE_EVERY = 100
 GENERATE_EVERY = 500
 GENERATE_LENGTH = 1024
 SEQ_LEN = 2048
-# Model, optimizer, and loss function
-model = GriffinModel(input_dim, hidden_dim, num_blocks)
-optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-loss_fn = torch.nn.CrossEntropyLoss()  # Replace with your loss function
 # Initialize the BERT tokenizer
 # Load Wikipedia dataset from `datasets`
-dataset = load_dataset("wikipedia", "20220301.en")["train"]
+
+# Load the SQuAD dataset
+dataset = load_dataset("squad_v2", split='train')
+
+
+# Initialize the BERT tokenizer
 tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
 
 
 # Tokenize and prepare dataset
 def encode(examples):
     return tokenizer(
-        examples["text"],
+        examples['question'],
+        examples['context'],
         truncation=True,
         padding="max_length",
         max_length=SEQ_LEN,
@@ -40,7 +43,9 @@ def encode(examples):
 
 
 encoded_dataset = dataset.map(encode, batched=True)
-encoded_dataset.set_format(type="torch", columns=["input_ids", "attention_mask"])
+encoded_dataset.set_format(
+    type="torch", columns=["input_ids", "attention_mask", "start_positions", "end_positions"]
+)
 
 # Split dataset into training and validation
 train_size = int(0.9 * len(encoded_dataset))
@@ -51,15 +56,21 @@ train_dataset, val_dataset = torch.utils.data.random_split(
 
 train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
-
+vocab_size = tokenizer.vocab_size
+# Model, optimizer, and loss function
+model = GriffinModel(vocab_size, input_dim, mlp_expansion_factor, rnn_width, depth)
+optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+loss_fn = torch.nn.CrossEntropyLoss()  # Replace with your loss function
 # Training loop
 for epoch in range(num_epochs):
-    for batch_idx, (data, targets) in enumerate(train_loader):
+    for batch_idx, batch in enumerate(train_loader):
         # Forward pass
-        predictions = model(data)
-        loss = loss_fn(predictions, targets)
-        # Backward pass
+        input_ids = batch['input_ids'].to(device)
+        attention_mask = batch['attention_mask'].to(device)
+        labels = batch['labels'].to(device)  # Use this as targets in your loss calculation
         optimizer.zero_grad()
+        outputs = model(input_ids=input_ids, attention_mask=attention_mask)
+        loss = loss_fn(outputs, labels)
         loss.backward()
         optimizer.step()
         if batch_idx % VALIDATE_EVERY == 0:

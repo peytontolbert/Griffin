@@ -36,7 +36,6 @@ class RMSNorm(nn.Module):
         super().__init__()
         self.scale = dim**0.5
         self.g = nn.Parameter(torch.ones(dim))
-        
 
     def forward(self, x):
         """
@@ -137,7 +136,7 @@ class GatedMLPBlock(nn.Module):
 
 
 class RG_LRU(nn.Module):
-    def __init__(self, input_dim, rnn_width):
+    def __init__(self, rnn_width):
         """
         Initializes the RG_LRU module.
 
@@ -146,7 +145,6 @@ class RG_LRU(nn.Module):
             hidden_size (int): The size of the hidden state.
         """
         super(RG_LRU, self).__init__()
-        self.input_dim = input_dim
         self.rnn_width = rnn_width
         # Scalar-valued constant 'c'
         self.c = 8
@@ -158,13 +156,10 @@ class RG_LRU(nn.Module):
         # Initialize the learnable parameter Λ for parameterizing 'a'
         self.Lambda = nn.Parameter(Tensor(rnn_width))
         self.reset_parameters()
+
     def reset_parameters(self):
-        nn.init.kaiming_normal_(
-            self.Wa, mode="fan_in", nonlinearity="sigmoid"
-        )
-        nn.init.kaiming_normal_(
-            self.Wx, mode="fan_in", nonlinearity="sigmoid"
-        )
+        nn.init.kaiming_normal_(self.Wa, mode="fan_in", nonlinearity="sigmoid")
+        nn.init.kaiming_normal_(self.Wx, mode="fan_in", nonlinearity="sigmoid")
         nn.init.constant_(self.ba, 0)
         nn.init.constant_(self.bx, 0)
         # Initialize Λ such that a is between 0.9 and 0.999
@@ -172,6 +167,7 @@ class RG_LRU(nn.Module):
             torch.logit(torch.tensor(0.9)),
             torch.logit(torch.tensor(0.999)),
         )
+
     def forward(self, xt, ht_minus_1):
         """
         Performs a forward pass through the RG_LRU module.
@@ -228,9 +224,15 @@ class RecurrentBlock(nn.Module):
     def __init__(self, input_dim, rnn_width):
         super(RecurrentBlock, self).__init__()
         # Initialize RG_LRU component for recurrent gating with local recurrent units.
-        self.rg_lru = RG_LRU(input_dim, rnn_width)
+        self.rg_lru = RG_LRU(rnn_width)
         # Temporal convolution layer with kernel size 4 for dimensionality transformation without dimension size.
-        self.temporal_conv = nn.Conv1d(in_channels=rnn_width, out_channels=rnn_width, kernel_size=4, padding=2, groups=rnn_width)
+        self.temporal_conv = nn.Conv1d(
+            in_channels=rnn_width,
+            out_channels=rnn_width,
+            kernel_size=4,
+            padding=2,
+            groups=rnn_width,
+        )
         # Linear transformation to map the hidden dimensions back to input dimensions.
         self.linear = nn.Linear(input_dim, rnn_width)
         self.linear2 = nn.Linear(rnn_width, input_dim)
@@ -247,7 +249,7 @@ class RecurrentBlock(nn.Module):
         x_rg = self.linear(x)
         x_rg = self.temporal_conv(x_rg.transpose(1, 2)).transpose(1, 2)
         print(f"x_rg shape: {x_rg.shape}")
-        x_rg = x_rg[:, :x_gel.size(1), :]
+        x_rg = x_rg[:, : x_gel.size(1), :]
         # Apply the RG_LRU operation for recurrent gating and feature enhancement.
         x_rg = self.rg_lru(x_rg, ht_minus_1)
         # Element-wise multiplication of the GELU-activated and RG_LRU-processed tensors for feature fusion.
@@ -286,7 +288,10 @@ class GriffinModel(nn.Module):
         super(GriffinModel, self).__init__()
         self.input_dim = input_dim
         self.layers = nn.ModuleList(
-            [ResidualBlock(input_dim, mlp_expansion_factor, rnn_width) for _ in range(depth)]
+            [
+                ResidualBlock(input_dim, mlp_expansion_factor, rnn_width)
+                for _ in range(depth)
+            ]
         )
         self.embd = Embedding(vocab_size, input_dim)
 

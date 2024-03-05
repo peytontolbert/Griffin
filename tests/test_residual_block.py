@@ -1,5 +1,7 @@
 from griffin import ResidualBlock, GatedMLPBlock, RMSNorm, RecurrentBlock
 import torch
+
+
 def test_residual_block():
     # Create an instance of the ResidualBlock class
     block = ResidualBlock(input_dim=10, expansion_factor=3, rnn_width=13)
@@ -30,6 +32,7 @@ def test_residual_block():
 
     print("All tests passed.")
     return output
+
 
 # Run the test
 output = test_residual_block()

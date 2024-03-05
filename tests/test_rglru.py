@@ -1,13 +1,14 @@
 import torch
-from griffin.griffin import RG_LRU
-
+from griffin import RG_LRU
+rnn_width=100
+batch_size = 32
 # Create an instance of RG_LRU
-module = RG_LRU(input_dim=10, mult=3)
+module = RG_LRU(rnn_width)
 
 # Test forward pass
-xt = torch.randn(32, 10)  # Input tensor of shape (batch_size, input_dim)
+xt = torch.randn(batch_size, rnn_width)  # Input tensor of shape (batch_size, input_dim)
 ht_minus_1 = torch.randn(
-    32, 10
+    batch_size, rnn_width
 )  # Previous hidden state tensor of shape (batch_size, hidden_dim)
 output = module.forward(xt, ht_minus_1)
 print(output.shape)  # Expected output: (32, 20)

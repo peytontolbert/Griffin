@@ -2,6 +2,7 @@ import torch
 from torch import nn
 from griffin.griffin import GriffinModel, RecurrentBlock
 
+
 def test_recurrent_block():
     # Create an instance of the RecurrentBlock class
     block = RecurrentBlock(input_dim=10, rnn_width=13)
@@ -15,6 +16,7 @@ def test_recurrent_block():
     # Check if the output tensor has the expected shape
     return output
 
+
 # Run the test
 output = test_recurrent_block()
-print(f'output: {output.shape}')
+print(f"output: {output.shape}")
