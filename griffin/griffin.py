@@ -17,9 +17,12 @@ def output_head(x: Tensor, dim: int):
     Returns:
         torch.Tensor: Output tensor of shape (batch_size, dim) after applying linear transformation and softmax activation.
     """
-    x = nn.LayerNorm(dim)(x)  # Adds training stability
-
-    x = nn.Linear(dim, dim)(x)  # Linear transformation
+    device = x.device
+    layer_norm = nn.LayerNorm(dim).to(device)
+    linear_layer = nn.Linear(dim, dim).to(device)
+    
+    x = layer_norm(x)  # Now, layer_norm is on the same device as x
+    x = linear_layer(x)  # Linear transformation on the correct device
 
     return F.softmax(x, dim=-1)  # Softmax
 
@@ -84,12 +87,14 @@ class ResidualBlock(nn.Module):
         x = self.norm1(x)
         # Apply the recurrent block to capture temporal features.
         x = self.recurrent(x)
+        print(x.device)
         # Add the original input back to introduce the residual connection.
         residual = x + residual
         # Normalize the output from the recurrent block and residual addition.
         x = self.norm2(residual)
         # Apply the gated MLP block for further processing.
         x = self.mlp(x)
+        print(x.device)
         # Add the residual connection again before returning the output.
         return x + residual
 
@@ -168,7 +173,7 @@ class RG_LRU(nn.Module):
             torch.logit(torch.tensor(0.999)),
         )
 
-    def forward(self, xt, ht_minus_1):
+    def forward(self, xt, ht_minus_1=None):
         """
         Performs a forward pass through the RG_LRU module.
 
@@ -181,7 +186,10 @@ class RG_LRU(nn.Module):
         """
         # Compute the recurrence gate (rt)
         print(f"xt shape: {xt.shape}")
-        print(f"ht_minus_1 shape: {ht_minus_1.shape}")
+        batch_size, seq_len, dim = xt.size()
+        if ht_minus_1 is None:
+            # Correct initialization of ht_minus_1 to zeros
+            ht_minus_1 = torch.zeros(batch_size, seq_len, self.rnn_width, device=xt.device, dtype=xt.dtype)
         rt = torch.sigmoid(F.linear(xt, self.Wa, self.ba))
         print(f"rt shape: {rt.shape}")
         # Compute the input gate (it)
@@ -238,10 +246,6 @@ class RecurrentBlock(nn.Module):
         self.linear2 = nn.Linear(rnn_width, input_dim)
 
     def forward(self, x, ht_minus_1=None):
-        # Initialize the hidden state if it is not provided.
-        if ht_minus_1 is None:
-            ht_minus_1 = torch.zeros(x.size(0), self.rg_lru.rnn_width, device=x.device)
-
         # Apply a linear transformation followed by GELU activation for non-linearity.
         print(f"x shape: {x.shape}")
         x_gel = F.gelu(self.linear(x))
@@ -251,7 +255,7 @@ class RecurrentBlock(nn.Module):
         print(f"x_rg shape: {x_rg.shape}")
         x_rg = x_rg[:, : x_gel.size(1), :]
         # Apply the RG_LRU operation for recurrent gating and feature enhancement.
-        x_rg = self.rg_lru(x_rg, ht_minus_1)
+        x_rg = self.rg_lru(x_rg, ht_minus_1 if ht_minus_1 is not None else None)
         # Element-wise multiplication of the GELU-activated and RG_LRU-processed tensors for feature fusion.
         combined_x = x_gel * x_rg
         # Final linear transformation to produce the output tensor.
@@ -297,6 +301,7 @@ class GriffinModel(nn.Module):
 
     def forward(self, x):
         x = self.embd(x)
+        print(f"initial x shape: {x.shape}")
         for layer in self.layers:
             x = layer(x) + x
         return output_head(x, self.input_dim)
