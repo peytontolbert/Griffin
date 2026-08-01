@@ -1,3 +1,5 @@
+"""Public package exports for the Griffin-style model components."""
+
 from .griffin import (
     GatedMLPBlock,
     GriffinModel,

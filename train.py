@@ -1,3 +1,5 @@
+"""Train the Griffin-style model as a character-level language model."""
+
 from __future__ import annotations
 
 import argparse
@@ -13,6 +15,7 @@ from griffin import GriffinModel
 
 
 def build_corpus(split: str) -> str:
+    """Load WikiQA rows and convert question-answer pairs into plain text."""
     dataset = load_dataset("wiki_qa", split=split)
     examples = []
     for row in dataset:
@@ -26,6 +29,7 @@ def build_corpus(split: str) -> str:
 
 
 def build_vocab(text: str) -> tuple[dict[str, int], dict[int, str]]:
+    """Build character-level token lookup tables from the training corpus."""
     chars = sorted(set(text))
     stoi = {ch: i for i, ch in enumerate(chars)}
     itos = {i: ch for ch, i in stoi.items()}
@@ -33,10 +37,12 @@ def build_vocab(text: str) -> tuple[dict[str, int], dict[int, str]]:
 
 
 def encode(text: str, stoi: dict[str, int]) -> torch.Tensor:
+    """Encode text into integer token IDs using the provided vocabulary."""
     return torch.tensor([stoi[ch] for ch in text], dtype=torch.long)
 
 
 def cross_entropy_for_sequence_logits(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+    """Compute CE loss for logits shaped ``[batch, sequence, vocab]``."""
     return F.cross_entropy(logits.reshape(-1, logits.size(-1)), targets.reshape(-1))
 
 
@@ -47,6 +53,7 @@ def estimate_loss(
     device: torch.device,
     max_batches: int,
 ) -> float:
+    """Estimate validation loss over a bounded number of batches."""
     model.eval()
     losses = []
     for batch_idx, (x, y) in enumerate(dataloader):
@@ -61,6 +68,7 @@ def estimate_loss(
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments for the training script."""
     parser = argparse.ArgumentParser(description="Train a small Griffin-style character LM.")
     parser.add_argument("--split", default="train")
     parser.add_argument("--seq-len", type=int, default=256)
@@ -78,9 +86,12 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    """Build data, train the model, validate periodically, and save a checkpoint."""
     args = parse_args()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+    # The model consumes integer token IDs, so text is encoded before dataset
+    # construction instead of passing HuggingFace row dictionaries to DataLoader.
     corpus = build_corpus(args.split)
     stoi, _ = build_vocab(corpus)
     token_ids = encode(corpus, stoi)
@@ -133,6 +144,7 @@ def main() -> None:
             optimizer.step()
 
             if step % args.validate_every == 0:
+                # Validation restores train mode before returning.
                 val_loss = estimate_loss(
                     model,
                     val_dataloader,

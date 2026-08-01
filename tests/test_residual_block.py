@@ -1,9 +1,12 @@
+"""Tests for residual-block shape and component wiring."""
+
 import torch
 
 from griffin import GatedMLPBlock, RMSNorm, RecurrentBlock, ResidualBlock
 
 
 def test_residual_block_preserves_input_shape_and_components():
+    """A residual block should keep shape and expose expected submodules."""
     block = ResidualBlock(input_dim=10, expansion_factor=3, rnn_width=13)
     x = torch.randn(2, 7, 10)
 

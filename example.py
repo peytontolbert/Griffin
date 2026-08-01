@@ -1,8 +1,11 @@
+"""Minimal forward-pass example for the Griffin-style language model."""
+
 import torch
 
 from griffin import GriffinModel
 
 
+# The model expects integer token IDs and returns raw vocabulary logits.
 vocab_size = 100
 model = GriffinModel(
     vocab_size=vocab_size,

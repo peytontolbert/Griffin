@@ -1,3 +1,5 @@
+"""Behavioral tests for the top-level Griffin language model."""
+
 import torch
 import torch.nn.functional as F
 
@@ -5,6 +7,7 @@ from griffin import GriffinModel
 
 
 def test_model_returns_vocab_logits():
+    """The model should return raw vocabulary logits, not hidden-width probs."""
     model = GriffinModel(
         vocab_size=17,
         input_dim=8,
@@ -21,6 +24,7 @@ def test_model_returns_vocab_logits():
 
 
 def test_eval_forward_is_deterministic():
+    """Registered heads should make eval output deterministic for same input."""
     torch.manual_seed(0)
     model = GriffinModel(
         vocab_size=17,
@@ -39,6 +43,7 @@ def test_eval_forward_is_deterministic():
 
 
 def test_lm_head_is_registered_and_receives_gradients():
+    """The language-model head must be trainable by the optimizer."""
     model = GriffinModel(
         vocab_size=17,
         input_dim=8,

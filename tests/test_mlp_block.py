@@ -1,9 +1,12 @@
+"""Tests for the gated MLP residual sublayer."""
+
 import torch
 
 from griffin import GatedMLPBlock
 
 
 def test_gated_mlp_block_preserves_input_width():
+    """The MLP expands internally and projects back to the input width."""
     block = GatedMLPBlock(input_dim=10, hidden_dim=30)
     x = torch.randn(4, 6, 10)
 
