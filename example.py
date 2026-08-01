@@ -1,12 +1,17 @@
-from griffin import GriffinModel
 import torch
 
-# Example usage
-input_dim = 512  # example dimension
-hidden_dim = 512  # example dimension
-num_blocks = 3  # example number of blocks
-model = GriffinModel(input_dim, hidden_dim, num_blocks)
-inputs = torch.randn(3, 15, input_dim)  # example input tensor
-output = model(inputs)
+from griffin import GriffinModel
 
-print("Model Output Shape:", output.shape)
+
+vocab_size = 100
+model = GriffinModel(
+    vocab_size=vocab_size,
+    input_dim=64,
+    mlp_expansion_factor=2,
+    rnn_width=64,
+    depth=2,
+)
+token_ids = torch.randint(0, vocab_size, (3, 15))
+logits = model(token_ids)
+
+print("Model output shape:", logits.shape)

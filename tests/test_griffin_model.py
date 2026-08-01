@@ -1,36 +1,58 @@
 import torch
-from torch.nn import Embedding
-import torch.nn as nn
-from griffin import GriffinModel, RecurrentBlock
+import torch.nn.functional as F
 
-vocab_size = 100
+from griffin import GriffinModel
 
 
-def test_griffin_model():
-    # Create an instance of the GriffinModel class
+def test_model_returns_vocab_logits():
     model = GriffinModel(
-        vocab_size=100, input_dim=10, mlp_expansion_factor=3, rnn_width=13, depth=12
+        vocab_size=17,
+        input_dim=8,
+        mlp_expansion_factor=2,
+        rnn_width=8,
+        depth=2,
     )
+    tokens = torch.randint(0, 17, (2, 5))
 
-    # Create a random input tensor
-    x = torch.randint(1, 100, (1, 32))
+    logits = model(tokens)
 
-    # Call the forward method of the GriffinModel class
-    output = model.forward(x)
-
-    # Check if the output tensor has the expected shape
-    assert output.shape == (1, 32, 10)
-
-    # Check if the layers attribute is an instance of nn.ModuleList
-    assert isinstance(model.layers, nn.ModuleList)
-
-    # Check if the embd attribute is an instance of Embedding
-    assert isinstance(model.embd, Embedding)
-
-    print("All tests passed.")
-    return output
+    assert logits.shape == (2, 5, 17)
+    assert not torch.allclose(logits.sum(dim=-1), torch.ones(2, 5))
 
 
-# Run the test
-output = test_griffin_model()
-print(f"Output shape: {output.shape}")
+def test_eval_forward_is_deterministic():
+    torch.manual_seed(0)
+    model = GriffinModel(
+        vocab_size=17,
+        input_dim=8,
+        mlp_expansion_factor=2,
+        rnn_width=8,
+        depth=1,
+    ).eval()
+    tokens = torch.randint(0, 17, (2, 5))
+
+    with torch.no_grad():
+        first = model(tokens)
+        second = model(tokens)
+
+    torch.testing.assert_close(first, second)
+
+
+def test_lm_head_is_registered_and_receives_gradients():
+    model = GriffinModel(
+        vocab_size=17,
+        input_dim=8,
+        mlp_expansion_factor=2,
+        rnn_width=8,
+        depth=1,
+    )
+    tokens = torch.randint(0, 17, (2, 5))
+    targets = torch.randint(0, 17, (2, 5))
+
+    logits = model(tokens)
+    loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), targets.reshape(-1))
+    loss.backward()
+
+    assert "lm_head.weight" in dict(model.named_parameters())
+    assert model.lm_head.weight.grad is not None
+    assert model.lm_head.weight.grad.abs().sum() > 0

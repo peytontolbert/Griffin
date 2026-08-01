@@ -1,22 +1,26 @@
 import torch
-from torch import nn
-from griffin.griffin import GriffinModel, RecurrentBlock
+
+from griffin import RecurrentBlock
 
 
-def test_recurrent_block():
-    # Create an instance of the RecurrentBlock class
+def test_recurrent_block_preserves_input_shape():
     block = RecurrentBlock(input_dim=10, rnn_width=13)
+    x = torch.randn(2, 7, 10)
 
-    # Create a random input tensor
-    x = torch.randn(1, 32, 10)
+    output = block(x)
 
-    # Call the forward method of the RecurrentBlock class
-    output = block.forward(x)
-
-    # Check if the output tensor has the expected shape
-    return output
+    assert output.shape == x.shape
 
 
-# Run the test
-output = test_recurrent_block()
-print(f"output: {output.shape}")
+def test_future_token_does_not_change_past_outputs():
+    torch.manual_seed(0)
+    block = RecurrentBlock(input_dim=6, rnn_width=6).eval()
+    x = torch.randn(2, 8, 6)
+    changed = x.clone()
+    changed[:, 4, :] += 10.0
+
+    with torch.no_grad():
+        original_output = block(x)
+        changed_output = block(changed)
+
+    torch.testing.assert_close(original_output[:, :4, :], changed_output[:, :4, :])
