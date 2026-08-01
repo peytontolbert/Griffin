@@ -16,9 +16,11 @@ from torch import Tensor
 import torch.nn as nn
 import torch.nn.functional as F
 
+from .triton_scan import fused_rglru_scan, triton_scan_available
+
 
 TemporalBlockType = Literal["recurrent", "attention"]
-ScanMode = Literal["auto", "sequential", "associative"]
+ScanMode = Literal["auto", "sequential", "associative", "fused"]
 
 
 @dataclass
@@ -165,7 +167,7 @@ class RG_LRU(nn.Module):
         super().__init__()
         self.rnn_width = rnn_width
         self.c = c
-        if scan_mode not in ("auto", "sequential", "associative"):
+        if scan_mode not in ("auto", "sequential", "associative", "fused"):
             raise ValueError(f"Unknown RG-LRU scan mode: {scan_mode}")
         self.scan_mode = scan_mode
         self.recurrence_gate = BlockDiagonalLinear(rnn_width, gate_blocks)
@@ -253,10 +255,24 @@ class RG_LRU(nn.Module):
 
         a_scan = a_t.to(accumulation_dtype)
         x_scan = normalized_input.to(accumulation_dtype)
-        use_associative = self.scan_mode == "associative" or (
-            self.scan_mode == "auto" and self.training and xt.is_cuda and seq_len > 1
+        use_fused = self.scan_mode == "fused" or (
+            self.scan_mode == "auto"
+            and xt.is_cuda
+            and triton_scan_available()
+            and a_scan.dtype == torch.float32
+            and seq_len > 1
         )
-        if use_associative:
+        use_associative = self.scan_mode == "associative" or (
+            self.scan_mode == "auto"
+            and self.training
+            and xt.is_cuda
+            and not triton_scan_available()
+            and seq_len > 1
+        )
+        if use_fused:
+            yt_accumulated = fused_rglru_scan(a_scan, x_scan, h)
+            h = yt_accumulated[:, -1]
+        elif use_associative:
             yt_accumulated = self._associative_scan(a_scan, x_scan, h)
             h = yt_accumulated[:, -1]
         else:
