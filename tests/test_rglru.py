@@ -2,7 +2,7 @@
 
 import torch
 
-from griffin import RG_LRU
+from griffin import BlockDiagonalLinear, RG_LRU
 
 
 def test_rglru_earlier_token_changes_later_hidden_state():
@@ -33,3 +33,15 @@ def test_rglru_returns_final_state():
     assert output.shape == x.shape
     assert final_state.shape == (2, 6)
     torch.testing.assert_close(output[:, -1, :], final_state)
+
+
+def test_rglru_uses_block_diagonal_lecun_gates():
+    """Paper-scale widths should use 16 independently initialized gate blocks."""
+    torch.manual_seed(0)
+    module = RG_LRU(rnn_width=64, gate_blocks=16)
+
+    assert isinstance(module.recurrence_gate, BlockDiagonalLinear)
+    assert isinstance(module.input_gate, BlockDiagonalLinear)
+    assert module.recurrence_gate.weight.shape == (16, 4, 4)
+    expected_std = 0.5
+    assert abs(module.recurrence_gate.weight.std().item() - expected_std) < 0.08
