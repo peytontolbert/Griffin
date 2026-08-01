@@ -29,6 +29,20 @@ def cross_entropy_for_sequence_logits(
     return F.cross_entropy(logits.reshape(-1, logits.size(-1)), targets.reshape(-1))
 
 
+def unpack_language_model_batch(
+    batch: list[torch.Tensor] | tuple[torch.Tensor, ...],
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Return inputs, targets, and segment positions from packed or flat data."""
+    if len(batch) == 3:
+        x, y, segment_pos = batch
+        return x, y, segment_pos
+    if len(batch) == 2:
+        x, y = batch
+        positions = torch.arange(x.size(1), dtype=torch.long)
+        return x, y, positions[None, :].expand(x.size(0), -1)
+    raise ValueError("Language-model batches must contain two or three tensors")
+
+
 @torch.no_grad()
 def estimate_loss(
     model: GriffinModel,
@@ -40,12 +54,14 @@ def estimate_loss(
     was_training = model.training
     model.eval()
     losses = []
-    for batch_idx, (x, y) in enumerate(dataloader):
+    for batch_idx, batch in enumerate(dataloader):
         if batch_idx >= max_batches:
             break
+        x, y, segment_pos = unpack_language_model_batch(batch)
         x = x.to(device)
         y = y.to(device)
-        logits = model(x)
+        segment_pos = segment_pos.to(device)
+        logits = model(x, segment_pos=segment_pos)
         losses.append(cross_entropy_for_sequence_logits(logits, y).item())
     model.train(was_training)
     if not losses:
@@ -213,13 +229,15 @@ def train(args: argparse.Namespace) -> tuple[GriffinModel, float]:
 
     model.train()
     final_loss = float("nan")
-    for step, (x, y) in enumerate(train_loader, start=1):
+    for step, batch in enumerate(train_loader, start=1):
         if step > max_steps:
             break
+        x, y, segment_pos = unpack_language_model_batch(batch)
         x = x.to(device)
         y = y.to(device)
+        segment_pos = segment_pos.to(device)
         optimizer.zero_grad(set_to_none=True)
-        logits = model(x)
+        logits = model(x, segment_pos=segment_pos)
         loss = cross_entropy_for_sequence_logits(logits, y)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)

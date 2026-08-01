@@ -116,3 +116,104 @@ def test_cached_token_decoding_matches_full_hybrid_forward():
         atol=2e-6,
         rtol=2e-6,
     )
+
+
+def test_segment_reset_blocks_previous_document_context():
+    """Logits after a reset must be independent of every previous-document token."""
+    torch.manual_seed(0)
+    model = GriffinModel(
+        vocab_size=23,
+        input_dim=8,
+        mlp_expansion_factor=2,
+        rnn_width=12,
+        depth=3,
+        attention_heads=2,
+        attention_window_size=4,
+    ).eval()
+    suffix = torch.tensor([[5, 6, 7]])
+    first = torch.cat([torch.tensor([[1, 2, 3, 4]]), suffix], dim=1)
+    changed = torch.cat([torch.tensor([[9, 10, 11, 4]]), suffix], dim=1)
+    segment_pos = torch.tensor([[0, 1, 2, 3, 0, 1, 2]])
+
+    with torch.no_grad():
+        first_logits = model(first, segment_pos=segment_pos)
+        changed_logits = model(changed, segment_pos=segment_pos)
+
+    torch.testing.assert_close(first_logits[:, 4:], changed_logits[:, 4:])
+
+
+def test_cached_segment_reset_matches_full_forward():
+    """A reset inside a later cached chunk must match full-sequence execution."""
+    torch.manual_seed(0)
+    model = GriffinModel(
+        vocab_size=23,
+        input_dim=8,
+        mlp_expansion_factor=2,
+        rnn_width=12,
+        depth=3,
+        attention_heads=2,
+        attention_window_size=4,
+    ).eval()
+    tokens = torch.tensor([[1, 2, 3, 4, 5, 6, 7]])
+    segment_pos = torch.tensor([[0, 1, 2, 3, 0, 1, 2]])
+
+    with torch.no_grad():
+        full_logits = model(tokens, segment_pos=segment_pos)
+        first, cache = model(
+            tokens[:, :3],
+            segment_pos=segment_pos[:, :3],
+            return_cache=True,
+        )
+        second, _ = model(
+            tokens[:, 3:],
+            cache,
+            segment_pos[:, 3:],
+            return_cache=True,
+        )
+
+    torch.testing.assert_close(
+        full_logits,
+        torch.cat([first, second], dim=1),
+        atol=1e-6,
+        rtol=1e-6,
+    )
+
+
+def test_variable_length_batched_prefill_and_decode_match_individual_sequences():
+    """Right-padded prompts must retain independent recurrent and attention caches."""
+    torch.manual_seed(0)
+    model = GriffinModel(
+        vocab_size=23,
+        input_dim=8,
+        mlp_expansion_factor=2,
+        rnn_width=12,
+        depth=3,
+        attention_heads=2,
+        attention_window_size=4,
+        attention_chunk_size=2,
+    ).eval()
+    prompts = torch.tensor([[1, 2, 3, 4, 5], [6, 7, 8, 0, 0]])
+    prompt_mask = torch.tensor(
+        [[True, True, True, True, True], [True, True, True, False, False]]
+    )
+    next_tokens = torch.tensor([[9], [10]])
+
+    with torch.no_grad():
+        batched_logits, batched_cache = model(
+            prompts,
+            token_mask=prompt_mask,
+            return_cache=True,
+        )
+        batched_next, _ = model(next_tokens, batched_cache, return_cache=True)
+
+        first_logits, first_cache = model(prompts[:1], return_cache=True)
+        first_next, _ = model(next_tokens[:1], first_cache, return_cache=True)
+        second_logits, second_cache = model(prompts[1:2, :3], return_cache=True)
+        second_next, _ = model(next_tokens[1:2], second_cache, return_cache=True)
+
+    torch.testing.assert_close(batched_logits[:1], first_logits, atol=2e-6, rtol=2e-6)
+    torch.testing.assert_close(
+        batched_logits[1:2, :3], second_logits, atol=2e-6, rtol=2e-6
+    )
+    torch.testing.assert_close(batched_next[:1], first_next, atol=2e-6, rtol=2e-6)
+    torch.testing.assert_close(batched_next[1:2], second_next, atol=2e-6, rtol=2e-6)

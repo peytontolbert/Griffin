@@ -7,6 +7,21 @@ import torch
 from torch.utils.data import Dataset, IterableDataset, get_worker_info
 
 
+def _normalize_block_positions(raw_positions: list[int]) -> list[int]:
+    """Reset positions at a block boundary and each document boundary inside it."""
+    if not raw_positions:
+        return []
+    normalized = []
+    segment_start = raw_positions[0]
+    previous = raw_positions[0]
+    for index, position in enumerate(raw_positions):
+        if index == 0 or position == 0 or position != previous + 1:
+            segment_start = position
+        normalized.append(position - segment_start)
+        previous = position
+    return normalized
+
+
 class TextDataset(Dataset):
     """Slice a flat token stream into shifted input and target windows."""
 
@@ -57,8 +72,9 @@ class PackedTokenDataset(IterableDataset):
         return islice(iter(self.rows), worker.id, None, worker.num_workers)
 
     def __iter__(self):
-        """Yield shifted token blocks without allowing train/validation overlap."""
+        """Yield shifted token blocks and positions that reset for every text row."""
         buffer: list[int] = []
+        position_buffer: list[int] = []
         token_count = 0
         eos_token_id = self.tokenizer.eos_token_id
         for row in self._rows_for_worker():
@@ -74,10 +90,19 @@ class PackedTokenDataset(IterableDataset):
                     break
                 token_ids = token_ids[:remaining]
             buffer.extend(token_ids)
+            position_buffer.extend(range(len(token_ids)))
             token_count += len(token_ids)
 
             while len(buffer) >= self.block_size + 1:
                 chunk = torch.tensor(buffer[: self.block_size + 1], dtype=torch.long)
-                yield chunk[:-1], chunk[1:]
+                normalized_positions = _normalize_block_positions(
+                    position_buffer[: self.block_size]
+                )
+                segment_pos = torch.tensor(
+                    normalized_positions,
+                    dtype=torch.long,
+                )
+                yield chunk[:-1], chunk[1:], segment_pos
                 # Retain the last target as the first input of the next block.
                 del buffer[: self.block_size]
+                del position_buffer[: self.block_size]

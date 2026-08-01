@@ -1,5 +1,7 @@
 """Behavioral tests for causal local multi-query attention."""
 
+import copy
+
 import torch
 
 from griffin import LocalMQAAttention
@@ -40,3 +42,20 @@ def test_local_attention_cache_matches_full_sequence():
         atol=1e-6,
         rtol=1e-6,
     )
+
+
+def test_chunked_attention_matches_single_chunk_attention():
+    """Bounded query chunks must preserve exact local-attention semantics."""
+    torch.manual_seed(0)
+    chunked = LocalMQAAttention(
+        input_dim=8, num_heads=2, window_size=5, chunk_size=2
+    ).eval()
+    single_chunk = copy.deepcopy(chunked)
+    single_chunk.chunk_size = 64
+    x = torch.randn(2, 13, 8)
+
+    with torch.no_grad():
+        chunked_output = chunked(x)
+        single_chunk_output = single_chunk(x)
+
+    torch.testing.assert_close(chunked_output, single_chunk_output)
