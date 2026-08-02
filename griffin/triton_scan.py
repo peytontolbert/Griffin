@@ -7,6 +7,9 @@ one forward and one backward kernel instead of one operation per token.
 
 from __future__ import annotations
 
+import threading
+import warnings
+
 import torch
 from torch import Tensor
 from torch.autograd.function import once_differentiable
@@ -17,6 +20,10 @@ try:
 except ImportError:  # Triton is optional so CPU installations remain usable.
     triton = None
     tl = None
+
+
+_VALIDATION_LOCK = threading.Lock()
+_VALIDATED_DEVICES: dict[tuple[str, int | None], bool] = {}
 
 
 if triton is not None:
@@ -118,6 +125,83 @@ if triton is not None:
 def triton_scan_available() -> bool:
     """Return whether the optional Triton package can provide the fused kernels."""
     return triton is not None
+
+
+def _reference_scan(decay: Tensor, current_input: Tensor, initial_state: Tensor) -> Tensor:
+    """Compute a small differentiable scan used only for backend validation."""
+    state = initial_state
+    outputs = []
+    for position in range(decay.size(1)):
+        state = decay[:, position] * state + current_input[:, position]
+        outputs.append(state)
+    return torch.stack(outputs, dim=1)
+
+
+def _validate_triton_scan(device: torch.device) -> None:
+    """Compile the fused kernels and compare forward and backward numerics."""
+    width = 257  # Exercises a partial tile and the production 256-wide tile.
+    sequence_length = 7
+    elements = sequence_length * width
+    values = torch.arange(elements, device=device, dtype=torch.float32)
+    decay = (0.9 + 0.05 * torch.sin(values / 97.0)).reshape(
+        1, sequence_length, width
+    )
+    current_input = (0.1 * torch.cos(values / 53.0)).reshape(
+        1, sequence_length, width
+    )
+    initial_state = torch.sin(torch.arange(width, device=device) / 31.0)[None]
+    upstream = torch.cos(values / 71.0).reshape(1, sequence_length, width)
+
+    reference_inputs = tuple(
+        tensor.detach().clone().requires_grad_(True)
+        for tensor in (decay, current_input, initial_state)
+    )
+    fused_inputs = tuple(
+        tensor.detach().clone().requires_grad_(True)
+        for tensor in (decay, current_input, initial_state)
+    )
+    reference_output = _reference_scan(*reference_inputs)
+    fused_output = fused_rglru_scan(*fused_inputs)
+    reference_gradients = torch.autograd.grad(
+        reference_output, reference_inputs, upstream
+    )
+    fused_gradients = torch.autograd.grad(fused_output, fused_inputs, upstream)
+    torch.cuda.synchronize(device)
+
+    torch.testing.assert_close(fused_output, reference_output, atol=2e-5, rtol=2e-5)
+    for fused_gradient, reference_gradient in zip(
+        fused_gradients, reference_gradients
+    ):
+        torch.testing.assert_close(
+            fused_gradient, reference_gradient, atol=3e-5, rtol=3e-5
+        )
+
+
+def triton_scan_is_usable(device: torch.device | str) -> bool:
+    """Validate Triton once per CUDA device before allowing automatic dispatch."""
+    resolved_device = torch.device(device)
+    if triton is None or resolved_device.type != "cuda" or not torch.cuda.is_available():
+        return False
+    if resolved_device.index is None:
+        resolved_device = torch.device("cuda", torch.cuda.current_device())
+    key = (resolved_device.type, resolved_device.index)
+    with _VALIDATION_LOCK:
+        if key in _VALIDATED_DEVICES:
+            return _VALIDATED_DEVICES[key]
+        try:
+            with torch.enable_grad(), torch.cuda.device(resolved_device):
+                _validate_triton_scan(resolved_device)
+        except Exception as error:  # Compilation and launch failures both fall back safely.
+            _VALIDATED_DEVICES[key] = False
+            warnings.warn(
+                "Fused RG-LRU scan failed its CUDA self-test; using the portable "
+                f"scan instead. Original error: {error}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        else:
+            _VALIDATED_DEVICES[key] = True
+        return _VALIDATED_DEVICES[key]
 
 
 class _FusedRGLRUScan(torch.autograd.Function):

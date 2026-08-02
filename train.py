@@ -18,7 +18,7 @@ from datasets import DatasetDict, IterableDatasetDict, load_dataset
 from torch.utils.data import DataLoader
 
 from dataset import PackedTokenDataset, TextDataset
-from griffin import GriffinModel
+from griffin import GriffinModel, RMSNorm
 
 
 def cross_entropy_for_sequence_logits(
@@ -41,6 +41,29 @@ def unpack_language_model_batch(
         positions = torch.arange(x.size(1), dtype=torch.long)
         return x, y, positions[None, :].expand(x.size(0), -1)
     raise ValueError("Language-model batches must contain two or three tensors")
+
+
+def adamw_parameter_groups(
+    model: GriffinModel,
+    weight_decay: float,
+) -> list[dict[str, Any]]:
+    """Separate matrix weights from biases and normalization parameters."""
+    decay_parameters = []
+    no_decay_parameters = []
+    seen_parameters: set[int] = set()
+    for module in model.modules():
+        for parameter_name, parameter in module.named_parameters(recurse=False):
+            if not parameter.requires_grad or id(parameter) in seen_parameters:
+                continue
+            seen_parameters.add(id(parameter))
+            if parameter_name == "bias" or isinstance(module, RMSNorm):
+                no_decay_parameters.append(parameter)
+            else:
+                decay_parameters.append(parameter)
+    return [
+        {"params": decay_parameters, "weight_decay": weight_decay},
+        {"params": no_decay_parameters, "weight_decay": 0.0},
+    ]
 
 
 @torch.no_grad()
@@ -221,10 +244,9 @@ def train(args: argparse.Namespace) -> tuple[GriffinModel, float]:
 
     model = _model_from_args(args, vocab_size).to(device)
     optimizer = torch.optim.AdamW(
-        model.parameters(),
+        adamw_parameter_groups(model, args.weight_decay),
         lr=args.learning_rate,
         betas=(args.beta1, args.beta2),
-        weight_decay=args.weight_decay,
     )
 
     model.train()

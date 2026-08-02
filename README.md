@@ -5,11 +5,21 @@ PyTorch implementation of the hybrid Griffin language-model architecture from
 schedule repeats two RG-LRU recurrent blocks followed by one causal local-MQA
 block. Input embeddings and the vocabulary head share weights.
 
+Install the model package and development dependencies:
+
+```powershell
+python -m pip install -e ".[train,test]"
+```
+
+On supported CUDA environments, install the optional Triton backend with
+`python -m pip install -e ".[triton]"`.
+
 On CUDA systems with the optional `triton` package installed, `scan_mode="auto"`
-uses a fused linear-work RG-LRU scan for both forward and backward. CPU systems
-use the sequential reference path, while `scan_mode="associative"` remains
-available as a portable parallel implementation. Use `scan_mode="fused"` to
-require the Triton backend and receive an explicit error when it is unavailable.
+runs a one-time forward/backward parity check before enabling the fused
+linear-work RG-LRU scan. A compile or numerical failure emits a warning and
+falls back to the portable associative scan. CPU systems use the sequential
+reference path. Use `scan_mode="fused"` to require the Triton backend and expose
+backend failures directly.
 
 Run the behavioral suite:
 

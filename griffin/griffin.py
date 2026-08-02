@@ -16,7 +16,7 @@ from torch import Tensor
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .triton_scan import fused_rglru_scan, triton_scan_available
+from .triton_scan import fused_rglru_scan, triton_scan_is_usable
 
 
 TemporalBlockType = Literal["recurrent", "attention"]
@@ -72,11 +72,12 @@ class RMSNorm(nn.Module):
         """Create an RMSNorm layer for the final dimension of an input tensor."""
         super().__init__()
         self.eps = eps
-        self.g = nn.Parameter(torch.ones(dim))
+        self.g = nn.Parameter(torch.zeros(dim))
 
     def forward(self, x: Tensor) -> Tensor:
         """Normalize ``x`` across its final dimension."""
-        return x * torch.rsqrt(x.pow(2).mean(dim=-1, keepdim=True) + self.eps) * self.g
+        normalized = x * torch.rsqrt(x.pow(2).mean(dim=-1, keepdim=True) + self.eps)
+        return normalized * (1.0 + self.g)
 
 
 class GatedMLPBlock(nn.Module):
@@ -111,7 +112,7 @@ class GatedMLPBlock(nn.Module):
 
     def forward(self, x: Tensor) -> Tensor:
         """Apply GELU(W1 x) * W2 x, then project back to ``input_dim``."""
-        gate = F.gelu(self.linear1(x))
+        gate = F.gelu(self.linear1(x), approximate="tanh")
         return self.linear3(gate * self.linear2(x))
 
 
@@ -255,18 +256,18 @@ class RG_LRU(nn.Module):
 
         a_scan = a_t.to(accumulation_dtype)
         x_scan = normalized_input.to(accumulation_dtype)
-        use_fused = self.scan_mode == "fused" or (
+        fused_usable = (
             self.scan_mode == "auto"
             and xt.is_cuda
-            and triton_scan_available()
             and a_scan.dtype == torch.float32
             and seq_len > 1
+            and triton_scan_is_usable(xt.device)
         )
+        use_fused = self.scan_mode == "fused" or fused_usable
         use_associative = self.scan_mode == "associative" or (
             self.scan_mode == "auto"
-            and self.training
             and xt.is_cuda
-            and not triton_scan_available()
+            and not fused_usable
             and seq_len > 1
         )
         if use_fused:
@@ -460,7 +461,7 @@ class RecurrentBlock(nn.Module):
             x, segment_pos, previous_position, active_mask
         )
 
-        y_branch = F.gelu(self.linear_y(x))
+        y_branch = F.gelu(self.linear_y(x), approximate="tanh")
         projected_x = self.linear_x(x)
         conv_state = self._empty_conv_state(projected_x) if cache is None else cache.conv_state
         if conv_state.shape != (
@@ -668,7 +669,7 @@ class LocalMQAAttention(nn.Module):
         for query_start in range(0, seq_len, self.chunk_size):
             query_end = min(seq_len, query_start + self.chunk_size)
             key_end = past_len + query_end
-            key_start = max(0, past_len + query_start - self.window_size + 1)
+            key_start = max(0, past_len + query_start - self.window_size)
             local_keys = keys[:, key_start:key_end]
             local_values = values[:, key_start:key_end]
             local_key_valid = key_valid[:, key_start:key_end]
@@ -676,7 +677,7 @@ class LocalMQAAttention(nn.Module):
             key_indices = torch.arange(key_start, key_end, device=x.device)
             causal = key_indices[None, :] <= query_indices[:, None]
             query_positions = segment_pos[:, query_start:query_end]
-            lookback = torch.clamp(query_positions, max=self.window_size - 1)
+            lookback = torch.clamp(query_positions, max=self.window_size)
             earliest_key = query_indices[None, :] - lookback
             same_document = key_indices[None, None, :] >= earliest_key[..., None]
             query_valid = active_mask[:, query_start:query_end]
@@ -701,7 +702,7 @@ class LocalMQAAttention(nn.Module):
         output = torch.where(active_mask[..., None], output, torch.zeros_like(output))
 
         if return_cache:
-            cache_limit = self.window_size - 1
+            cache_limit = self.window_size
             valid_counts = key_valid.sum(dim=1).clamp(max=cache_limit)
             cache_length = int(valid_counts.max().item()) if cache_limit else 0
             cached_keys = keys.new_zeros(batch_size, cache_length, self.head_dim)

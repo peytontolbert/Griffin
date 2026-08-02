@@ -14,4 +14,5 @@ def test_rmsnorm_preserves_shape_and_normalizes_rms():
 
     rms = output.pow(2).mean(dim=-1).sqrt()
     assert output.shape == x.shape
+    torch.testing.assert_close(norm.g, torch.zeros_like(norm.g))
     torch.testing.assert_close(rms, torch.ones_like(rms), atol=1e-5, rtol=1e-5)

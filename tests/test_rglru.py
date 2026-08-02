@@ -6,7 +6,11 @@ import pytest
 import torch
 
 from griffin import BlockDiagonalLinear, RG_LRU
-from griffin.triton_scan import fused_rglru_scan, triton_scan_available
+from griffin.triton_scan import (
+    fused_rglru_scan,
+    triton_scan_available,
+    triton_scan_is_usable,
+)
 
 
 FUSED_SCAN_AVAILABLE = torch.cuda.is_available() and triton_scan_available()
@@ -115,11 +119,17 @@ def test_explicit_fused_scan_rejects_unsupported_runtime():
         module(torch.randn(2, 7, 8))
 
 
+def test_auto_fused_validation_rejects_non_cuda_device():
+    """Automatic fused dispatch must remain disabled without a validated GPU."""
+    assert not triton_scan_is_usable(torch.device("cpu"))
+
+
 @pytest.mark.skipif(not FUSED_SCAN_AVAILABLE, reason="requires CUDA and Triton")
 def test_fused_affine_scan_matches_reference_values_and_gradients():
     """The Triton kernels must match autograd through the scalar recurrence."""
     torch.manual_seed(0)
     device = torch.device("cuda")
+    assert triton_scan_is_usable(device)
     reference_decay = torch.sigmoid(
         torch.randn(2, 37, 65, device=device, requires_grad=True)
     )

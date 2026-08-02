@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "griffin-language-model"
+version = "0.1.0"
+description = "PyTorch implementation of the hybrid Griffin language model"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.2",
+]
+
+[project.optional-dependencies]
+train = [
+    "datasets>=2.18",
+    "transformers>=4.39",
+]
+test = [
+    "pytest>=8",
+    "tomli>=2; python_version < '3.11'",
+]
+triton = [
+    "triton>=2.2; platform_system == 'Linux'",
+]
+all = [
+    "datasets>=2.18",
+    "transformers>=4.39",
+    "pytest>=8",
+    "tomli>=2; python_version < '3.11'",
+    "triton>=2.2; platform_system == 'Linux'",
+]
+
+[project.scripts]
+griffin-train = "train:main"
+
+[tool.setuptools]
+py-modules = ["dataset", "train"]
+
+[tool.setuptools.packages.find]
+include = ["griffin*"]
